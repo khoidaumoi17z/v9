@@ -1,0 +1,115 @@
+name: Build VNBAPEX Tool v9
+
+"on":
+  push:
+    branches: [main, master]
+    paths:
+      - "VNBAPEX-Tool-iPhone-v9.zip"
+      - ".github/workflows/build-ipa.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract source archive
+        shell: bash
+        run: |
+          test -f VNBAPEX-Tool-iPhone-v9.zip
+          mkdir -p ios-build-source
+          unzip -q VNBAPEX-Tool-iPhone-v9.zip -d ios-build-source
+          test -f ios-build-source/VNBAPEXTool/project.yml
+
+      - name: Test incremental dump parser and 100 MiB boundary
+        shell: bash
+        run: |
+          node ios-build-source/VNBAPEXTool/Tests/parser.test.cjs
+          node ios-build-source/VNBAPEXTool/Tests/relations.test.cjs
+          node ios-build-source/VNBAPEXTool/Tests/deep-analysis.test.cjs
+          node ios-build-source/VNBAPEXTool/Tests/import-v7.test.cjs
+          node ios-build-source/VNBAPEXTool/Tests/focus.test.cjs
+          node ios-build-source/VNBAPEXTool/Tests/focus-ui.test.cjs
+          node ios-build-source/VNBAPEXTool/Tests/deep-v9.test.cjs
+
+      - name: Install XcodeGen
+        shell: bash
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project
+        shell: bash
+        run: |
+          cd ios-build-source/VNBAPEXTool
+          xcodegen generate --spec project.yml
+
+      - name: Build ARM64 device application
+        shell: bash
+        run: |
+          cd ios-build-source/VNBAPEXTool
+          set -o pipefail
+          xcodebuild \
+            -project iOSOffsetDesk.xcodeproj \
+            -scheme iOSOffsetDesk \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/offsetdesk-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ARCHS=arm64 \
+            build 2>&1 | tee "$GITHUB_WORKSPACE/xcode-build.log"
+
+      - name: Verify app and package unsigned IPA
+        shell: bash
+        run: |
+          APP_PATH="$RUNNER_TEMP/offsetdesk-derived/Build/Products/Release-iphoneos/iOSOffsetDesk.app"
+          test -f "$APP_PATH/iOSOffsetDesk"
+          test -f "$APP_PATH/Web/index.html"
+          test -f "$APP_PATH/Web/core.js"
+          test -f "$APP_PATH/Web/ios-bridge.js"
+          test -f "$APP_PATH/Web/dump-ui.js"
+          test -f "$APP_PATH/Web/dump-stream.js"
+          test -f "$APP_PATH/Web/evidence.js"
+          test -f "$APP_PATH/Web/analysis-ui.js"
+          test -f "$APP_PATH/Web/relations.js"
+          test -f "$APP_PATH/Web/assessment.js"
+          test -f "$APP_PATH/Web/focus.js"
+          test -f "$APP_PATH/Web/fingerprints.js"
+          test -f "$APP_PATH/Web/focus-ui.js"
+          test -f "$APP_PATH/Web/theme.css"
+          test -f "$APP_PATH/Web/brand.svg"
+          file "$APP_PATH/iOSOffsetDesk"
+          mkdir -p "$RUNNER_TEMP/offsetdesk-package/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/offsetdesk-package/Payload/"
+          cd "$RUNNER_TEMP/offsetdesk-package"
+          /usr/bin/zip -q -r "$GITHUB_WORKSPACE/VNBAPEX-Tool-v9-unsigned.ipa" Payload
+          /usr/bin/unzip -t "$GITHUB_WORKSPACE/VNBAPEX-Tool-v9-unsigned.ipa"
+
+      - name: Upload IPA and build instructions
+        uses: actions/upload-artifact@v4
+        with:
+          name: VNBAPEX-Tool-v9-unsigned-IPA
+          path: |
+            VNBAPEX-Tool-v9-unsigned.ipa
+            ios-build-source/VNBAPEXTool/HUONG-DAN-IPHONE.md
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build log even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VNBAPEX-Tool-v9-build-log
+          path: xcode-build.log
+          if-no-files-found: ignore
+          retention-days: 14
